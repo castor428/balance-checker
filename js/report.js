@@ -78,12 +78,11 @@ function renderChecks(checks) {
 function renderOrphans(coverage) {
   if (!coverage.외톨이수) return '';
   let html = `<h2 class="pass-head">검증 불가 — 육안 확인 필요 <span class="pass-count">${coverage.외톨이수}건</span></h2>`;
-  html += `<div class="check-block"><div class="check-desc">아래 숫자 셀들은 자동으로 검산할 산술 관계(산식·합계·계층·교차)가 없어 기계 검증이 불가능합니다. 해당 항목은 작성자가 직접 눈으로 확인하세요.</div>`;
-  html += `<table><thead><tr><th>표</th><th>항목</th><th>검증 불가 셀 수</th></tr></thead><tbody>`;
-  for (const sheet in coverage.외톨이상세) {
-    for (const field in coverage.외톨이상세[sheet]) {
-      html += `<tr><td>${escapeHtml(sheet)}</td><td>${escapeHtml(field)}</td><td class="num">${coverage.외톨이상세[sheet][field]}</td></tr>`;
-    }
+  html += `<div class="check-block"><div class="check-desc">아래 숫자 셀들은 자동으로 검산할 산술 관계(산식·합계·계층·교차)가 없어 기계 검증이 불가능합니다. 해당 위치를 직접 눈으로 확인하세요.</div>`;
+  html += `<table><thead><tr><th>표</th><th>행(엑셀)</th><th>행 라벨</th><th>항목</th><th>표기값</th></tr></thead><tbody>`;
+  for (const c of (coverage.외톨이목록 || [])) {
+    const v = fmtVal(c['표기값']);
+    html += `<tr><td>${escapeHtml(c.시트)}</td><td class="num">${c['행(엑셀)']}</td><td>${escapeHtml(c.행라벨 || '-')}</td><td>${escapeHtml(c.항목)}</td><td class="${v.num ? 'num' : ''}">${escapeHtml(v.text)}</td></tr>`;
   }
   html += `</tbody></table></div>`;
   return html;
@@ -122,11 +121,10 @@ function buildCsv(result, fileInfo) {
     lines.push('');
   }
   if (c.외톨이수) {
-    lines.push(csvCell('[검증 불가 — 육안 확인] 표,항목,셀 수'));
-    for (const sheet in c.외톨이상세) {
-      for (const field in c.외톨이상세[sheet]) {
-        lines.push([csvCell(sheet), csvCell(field), c.외톨이상세[sheet][field]].join(','));
-      }
+    lines.push(csvCell(`[검증 불가 — 육안 확인] ${c.외톨이수}건`));
+    lines.push(['표', '행(엑셀)', '행 라벨', '항목', '표기값'].map(csvCell).join(','));
+    for (const o of (c.외톨이목록 || [])) {
+      lines.push([csvCell(o.시트), o['행(엑셀)'], csvCell(o.행라벨), csvCell(o.항목), csvCell(o['표기값'])].join(','));
     }
   }
   return '﻿' + lines.join('\r\n');

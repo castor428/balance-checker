@@ -45,20 +45,23 @@ function pass1_formulas(sheets, touched) {
     for (const u of ps.units) {
       for (const { target, terms, eq } of eqs) {
         const actual = u.n[target];
-        if (actual === null || actual === undefined) continue;
-        // 결산서 회계 관행: 빈칸은 0과 동치(예: 첫 해 "전년도이월사업비" 빈칸 = 0)
+        const hasTarget = actual !== null && actual !== undefined;
+        const operandsAllPresent = terms.every((t) => u.n[t.f] !== null && u.n[t.f] !== undefined);
+        // 결산서 회계 관행: 빈칸은 0과 동치. 타겟·피연산자 모두 빈칸이면 식 자체가 의미 없어 skip.
+        if (!hasTarget && !operandsAllPresent) continue;
         let expected = 0;
         for (const t of terms) {
           const v = u.n[t.f];
           expected += t.sign * (v === null || v === undefined ? 0 : v);
         }
-        // 검산 성립 — 관련 셀 모두 터치 (null 피연산자는 셀 자체가 없으니 자동 제외)
+        const actualVal = hasTarget ? actual : 0;
+        // 관련 셀 모두 터치 (null 셀은 allCells 에 없으므로 마킹해도 무해)
         touched.add(cellKey(spec.id, u._row, target));
         for (const t of terms) touched.add(cellKey(spec.id, u._row, t.f));
-        if (Math.abs(actual - expected) > TOLERANCE.금액_원) {
+        if (Math.abs(actualVal - expected) > TOLERANCE.금액_원) {
           res.issues.push({
             구획: u._section || '-', '행(엑셀)': u._row + 1, 산식: eq,
-            계산값: expected, 표기값: actual, 차이: actual - expected,
+            계산값: expected, 표기값: hasTarget ? actual : '(빈칸)', 차이: actualVal - expected,
           });
         }
       }
@@ -456,8 +459,25 @@ function verifyAll(sheets) {
   checks.push(...pass4_crossrefs(sheets, touched));
   checks.push(...pass5_structural(sheets, touched));
 
-  // 외톨이 — 어느 패스에도 안 걸린 숫자 셀
+  // 외톨이 — 어느 패스에도 안 걸린 숫자 셀. 셀별 위치·값까지 보존해 사용자가 직접 확인 가능.
   const orphanCells = allCells.filter((c) => !touched.has(c.key));
+  const cellValue = (specId, row, field) => {
+    const ps = sheets[specId];
+    const u = ps && ps.units.find((x) => x._row === row);
+    return u ? u.n[field] : null;
+  };
+  const cellLabel = (specId, row) => {
+    const ps = sheets[specId];
+    const u = ps && ps.units.find((x) => x._row === row);
+    return u ? (u._key || '') : '';
+  };
+  const orphanList = orphanCells.map((c) => ({
+    시트: (SHEET_SPEC_BY_ID[c.specId] || {}).label || c.specId,
+    '행(엑셀)': c.row + 1,
+    항목: c.field,
+    표기값: cellValue(c.specId, c.row, c.field),
+    행라벨: cellLabel(c.specId, c.row),
+  }));
   const orphansBySheet = {};
   for (const c of orphanCells) {
     const label = (SHEET_SPEC_BY_ID[c.specId] || {}).label || c.specId;
@@ -481,6 +501,7 @@ function verifyAll(sheets) {
     커버리지율: allCells.length ? Math.round(((allCells.length - orphanCells.length) / allCells.length) * 1000) / 10 : 0,
     실패건수: issueCount,
     외톨이상세: orphansBySheet,
+    외톨이목록: orphanList,
   };
 
   return { checks, coverage };
