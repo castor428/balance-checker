@@ -67,6 +67,12 @@ main { max-width: 1100px; margin: 0 auto; padding: 28px 24px 60px; }
   font-weight: 700;
   color: #b04632;
 }
+.passed-list {
+  font-size: 13px;
+  color: #3e4c59;
+  line-height: 1.9;
+  padding: 16px 18px;
+}
 .check-block {
   background: #fff;
   border: 1px solid #e1e7ec;

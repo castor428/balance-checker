@@ -31,38 +31,45 @@ function renderCoverage(coverage, fileInfo) {
   document.getElementById('summary').innerHTML = html;
 }
 
-/* ---------- 검산 결과 (패스별 그룹) ---------- */
+/* ---------- 검산 결과 (패스별 그룹) — 이상 있는 검산만 펼쳐서 표시 ---------- */
 function renderChecks(checks) {
   const passOrder = ['행내 산식', '합계행 검산', '계층 소계', '표 간 교차', '구조 무결성'];
   const byPass = {};
   for (const c of checks) (byPass[c.pass] = byPass[c.pass] || []).push(c);
 
   let html = '';
+  const passedAll = []; // 이상 없는 검산은 한 줄 요약으로 묶어 맨 아래에 표시
+
   for (const pass of passOrder) {
     const group = byPass[pass];
     if (!group) continue;
-    const passTotal = group.reduce((n, c) => n + c.issues.length, 0);
+    const failing = group.filter((c) => c.issues.length > 0);
+    for (const c of group) if (c.issues.length === 0) passedAll.push(c.title);
+    if (!failing.length) continue;
+    const passTotal = failing.reduce((n, c) => n + c.issues.length, 0);
     html += `<h2 class="pass-head">${pass} <span class="pass-count">${passTotal}건</span></h2>`;
-    for (const c of group) {
-      const n = c.issues.length;
+    for (const c of failing) {
       html += `<div class="check-block">`;
-      html += `<div class="check-head"><h3>${escapeHtml(c.title)}</h3><span class="count ${n ? 'has' : 'none'}">${n ? n + '건' : '이상 없음'}</span></div>`;
+      html += `<div class="check-head"><h3>${escapeHtml(c.title)}</h3><span class="count has">${c.issues.length}건</span></div>`;
       html += `<div class="check-desc">${escapeHtml(c.desc)}</div>`;
       html += `<table><thead><tr>${c.columns.map((col) => `<th>${escapeHtml(col)}</th>`).join('')}</tr></thead><tbody>`;
-      if (n === 0) {
-        html += `<tr class="empty-row"><td colspan="${c.columns.length}">검산 결과 이상이 발견되지 않았습니다.</td></tr>`;
-      } else {
-        for (const issue of c.issues) {
-          html += '<tr>';
-          for (const col of c.columns) {
-            const f = fmtVal(issue[col]);
-            html += `<td class="${f.num ? 'num' : ''}">${escapeHtml(f.text)}</td>`;
-          }
-          html += '</tr>';
+      for (const issue of c.issues) {
+        html += '<tr>';
+        for (const col of c.columns) {
+          const f = fmtVal(issue[col]);
+          html += `<td class="${f.num ? 'num' : ''}">${escapeHtml(f.text)}</td>`;
         }
+        html += '</tr>';
       }
       html += `</tbody></table></div>`;
     }
+  }
+
+  if (passedAll.length) {
+    html += `<h2 class="pass-head">✓ 통과한 검산 <span class="pass-count" style="color:#2f7a3f">${passedAll.length}개 이상 없음</span></h2>`;
+    html += `<div class="check-block"><div class="check-desc passed-list">`;
+    html += passedAll.map((t) => escapeHtml(t)).join(' · ');
+    html += `</div></div>`;
   }
   return html;
 }
@@ -101,12 +108,17 @@ function buildCsv(result, fileInfo) {
   lines.push(csvCell(`인식 파일: ${fileInfo.join(' / ')}`));
   lines.push(csvCell(`전수 커버리지: ${c.커버리지율}% (숫자셀 ${c.숫자셀수} / 검증 ${c.터치된셀수} / 외톨이 ${c.외톨이수} / 실패 ${c.실패건수})`));
   lines.push('');
+  // 실패한 검산만 자세히 적고, 통과한 것들은 맨 아래 한 줄 요약
+  const passed = [];
   for (const chk of result.checks) {
-    lines.push(`${csvCell('[' + chk.pass + '] ' + chk.title)},${csvCell(chk.issues.length ? chk.issues.length + '건' : '이상 없음')}`);
-    if (chk.issues.length) {
-      lines.push(chk.columns.map(csvCell).join(','));
-      for (const issue of chk.issues) lines.push(chk.columns.map((col) => csvCell(issue[col])).join(','));
-    }
+    if (!chk.issues.length) { passed.push(chk.title); continue; }
+    lines.push(`${csvCell(chk.title)},${csvCell(chk.issues.length + '건')}`);
+    lines.push(chk.columns.map(csvCell).join(','));
+    for (const issue of chk.issues) lines.push(chk.columns.map((col) => csvCell(issue[col])).join(','));
+    lines.push('');
+  }
+  if (passed.length) {
+    lines.push(`${csvCell('✓ 다음 ' + passed.length + '개 검산은 이상 없음')},${csvCell(passed.join(' · '))}`);
     lines.push('');
   }
   if (c.외톨이수) {
