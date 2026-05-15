@@ -1,6 +1,6 @@
 /*
  * app.js — UI 제어 및 전체 파이프라인 연결
- *   파일 업로드 → SheetJS 파싱 → 별표 파서 → 점검 규칙 → 리포트 렌더
+ *   다중 파일 업로드 → SheetJS 파싱 → parseWorkbooks → verifyAll(전수 엔진) → renderReport
  */
 
 (function () {
@@ -12,8 +12,8 @@
   const errorSection = document.getElementById('error-section');
   const errorBox = document.getElementById('error-box');
 
-  let lastChecks = null;
-  let lastFileName = '';
+  let lastResult = null;
+  let lastFileInfo = [];
 
   function showError(msg) {
     errorSection.hidden = false;
@@ -24,54 +24,71 @@
     errorBox.textContent = '';
   }
 
-  function handleFile(file) {
+  function handleFiles(fileList) {
     clearError();
-    if (!file) return;
-    if (!/\.xlsx$/i.test(file.name)) {
-      showError('xlsx 파일만 점검할 수 있습니다. 결산서 「5. 세입세출결산서 첨부서류」 xlsx 파일을 올려주세요.');
+    const files = [...fileList].filter((f) => /\.xlsx$/i.test(f.name));
+    if (!files.length) {
+      showError('xlsx 파일을 올려주세요. 「2. 결산서」와 「5. 세입세출결산서 첨부서류」를 함께 올리면 파일 간 교차검증까지 수행합니다.');
       return;
     }
-    fileStatus.textContent = `${file.name} 읽는 중…`;
-    const reader = new FileReader();
-    reader.onload = function (e) {
-      try {
-        const wb = XLSX.read(e.target.result, { type: 'array' });
-        const data = parseWorkbook(wb);
-        const allMissing =
-          !data.byeolpyo8.sheetFound &&
-          !data.byeolpyo12_1.sheetFound &&
-          !data.byeolpyo12_2.sheetFound &&
-          !data.byeolpyo14_2.sheetFound;
-        if (allMissing) {
+    if (files.length > 4) {
+      showError('한 번에 최대 4개까지 올릴 수 있습니다.');
+      return;
+    }
+    fileStatus.textContent = `${files.map((f) => f.name).join(', ')} 읽는 중…`;
+
+    const readers = files.map(
+      (file) =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            try {
+              resolve({ name: file.name, wb: XLSX.read(e.target.result, { type: 'array' }) });
+            } catch (err) {
+              reject(new Error(`${file.name}: ${err.message}`));
+            }
+          };
+          reader.onerror = () => reject(new Error(`${file.name} 읽기 실패`));
+          reader.readAsArrayBuffer(file);
+        })
+    );
+
+    Promise.all(readers)
+      .then((loaded) => {
+        const fileInfo = loaded.map((l) => `${l.name} (${detectFileType(l.wb)})`);
+        const unknown = loaded.filter((l) => detectFileType(l.wb) === 'unknown');
+        if (unknown.length === loaded.length) {
           showError(
-            '별표 8·12·14 시트를 하나도 찾지 못했습니다. 올린 파일이 「5. 세입세출결산서 첨부서류」가 맞는지 확인하세요. ' +
-            '(현재 파일의 시트: ' + wb.SheetNames.join(', ') + ')'
+            '올린 파일에서 결산서·첨부서류 시트를 찾지 못했습니다. ' +
+            '「2. 결산서」 또는 「5. 세입세출결산서 첨부서류」 xlsx가 맞는지 확인하세요.'
           );
           fileStatus.textContent = '';
           return;
         }
-        const checks = runAllChecks(data);
-        lastChecks = checks;
-        lastFileName = file.name;
-        renderReport(data, checks);
+        const { sheets, hasAttach, hasSettle } = parseWorkbooks(loaded.map((l) => l.wb));
+        const result = verifyAll(sheets);
+        lastResult = result;
+        lastFileInfo = fileInfo;
+        renderReport(result, fileInfo);
         uploadSection.hidden = true;
         resultSection.hidden = false;
         window.scrollTo(0, 0);
-      } catch (err) {
+        if (!hasAttach || !hasSettle) {
+          const missing = [!hasAttach ? '첨부서류(파일5)' : null, !hasSettle ? '결산서(파일2)' : null].filter(Boolean);
+          fileStatus.textContent = `※ ${missing.join(', ')}가 없어 해당 파일이 필요한 검증은 건너뛰었습니다.`;
+        } else {
+          fileStatus.textContent = '';
+        }
+      })
+      .catch((err) => {
         console.error(err);
         showError('파일을 읽는 중 오류가 발생했습니다: ' + err.message);
         fileStatus.textContent = '';
-      }
-    };
-    reader.onerror = function () {
-      showError('파일을 읽지 못했습니다. 다시 시도해 주세요.');
-    };
-    reader.readAsArrayBuffer(file);
+      });
   }
 
-  // 드래그 앤 드롭
   dropzone.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+  fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
   ['dragenter', 'dragover'].forEach((ev) =>
     dropzone.addEventListener(ev, (e) => {
       e.preventDefault();
@@ -85,16 +102,15 @@
     })
   );
   dropzone.addEventListener('drop', (e) => {
-    if (e.dataTransfer.files && e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
   });
 
-  // 내보내기 / 초기화
   document.getElementById('btn-csv').addEventListener('click', () => {
-    if (lastChecks) downloadCsv(lastChecks, lastFileName);
+    if (lastResult) downloadCsv(lastResult, lastFileInfo);
   });
   document.getElementById('btn-reset').addEventListener('click', () => {
-    lastChecks = null;
-    lastFileName = '';
+    lastResult = null;
+    lastFileInfo = [];
     fileInput.value = '';
     fileStatus.textContent = '';
     resultSection.hidden = true;

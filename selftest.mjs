@@ -1,50 +1,59 @@
 /*
- * selftest.mjs — 점검 파이프라인 회귀 테스트 (Node.js 전용)
+ * selftest.mjs — 전수 검증 엔진 회귀 테스트 (Node.js 전용)
  *
- * 결산서 서식이 개정되거나 코드를 수정한 뒤, 실제 결산서 xlsx로 파서·점검 규칙이
- * 정상 동작하는지 확인하는 용도. 브라우저 없이 콘솔에서 점검 결과를 출력한다.
+ * 결산서 서식이 개정되거나 코드를 수정한 뒤, 실제 결산서 xlsx로 파서·엔진이
+ * 정상 동작하는지 브라우저 없이 콘솔에서 확인한다.
  *
  * 사용법:
- *   node selftest.mjs "<결산서 5.첨부서류 xlsx 경로>"
- *
- * 예:
- *   node selftest.mjs "../refs/2025회계연도 결산서 파일/5.2025회계연도 세입 세출 결산서 첨부서류.xlsx"
+ *   node selftest.mjs "<첨부서류 xlsx>" ["<결산서 xlsx>"]
+ *   (파일 순서 무관 — 시트 내용으로 자동 식별. 1개만 줘도 가능.)
  */
 import { readFileSync } from 'fs';
 import XLSX from './lib/xlsx.full.min.js';
 
-const xlsxPath = process.argv[2];
-if (!xlsxPath) {
-  console.error('사용법: node selftest.mjs "<결산서 5.첨부서류 xlsx 경로>"');
+const paths = process.argv.slice(2);
+if (!paths.length) {
+  console.error('사용법: node selftest.mjs "<첨부서류 xlsx>" ["<결산서 xlsx>"]');
   process.exit(1);
 }
 
-// 브라우저 전역(window) 모사 — 앱 코드를 그대로 재사용
 globalThis.window = globalThis;
 globalThis.XLSX = XLSX;
 const load = (p) => new Function(readFileSync(new URL(p, import.meta.url), 'utf8'))();
 load('./js/constants.js');
 load('./js/parsers.js');
+load('./js/settlement-parsers.js');
 load('./js/matching.js');
-load('./js/checks.js');
+load('./js/engine.js');
 
-const wb = XLSX.read(readFileSync(xlsxPath), { type: 'buffer' });
-const data = parseWorkbook(wb);
+const wbs = paths.map((p) => XLSX.read(readFileSync(p), { type: 'buffer' }));
+wbs.forEach((wb, i) => console.log(`입력 ${i + 1}: ${paths[i].split('/').pop()} → ${detectFileType(wb)}`));
 
-console.log('=== 파서 결과 요약 ===');
-console.log('별표8     :', data.byeolpyo8.sheetFound ? `${data.byeolpyo8.rows.length}개 사업` : '시트 없음');
-console.log('별표12-1  :', data.byeolpyo12_1.sheetFound
-  ? data.byeolpyo12_1.sections.map((s) => `${s.회계}(${s.rows.length}행)`).join(' | ') : '시트 없음');
-console.log('별표12-2  :', data.byeolpyo12_2.sheetFound ? `${data.byeolpyo12_2.blocks.length}개 블록` : '시트 없음');
-console.log('별표14-2  :', data.byeolpyo14_2.sheetFound
-  ? data.byeolpyo14_2.sections.map((s) => `${s.회계}(${s.rows.length}행)`).join(' | ') : '시트 없음');
+const { sheets, hasAttach, hasSettle } = parseWorkbooks(wbs);
+console.log(`\n파일 인식: 첨부서류=${hasAttach ? 'O' : 'X'} 결산서=${hasSettle ? 'O' : 'X'}`);
 
-const checks = runAllChecks(data);
-console.log('\n=== 점검 결과 ===');
-let totalIssues = 0;
-for (const c of checks) {
-  totalIssues += c.issues.length;
-  console.log(`\n[${c.id}] ${c.title} — ${c.issues.length}건`);
-  for (const iss of c.issues) console.log('   ', JSON.stringify(iss));
+console.log('\n=== 파서 결과 ===');
+for (const id in sheets) {
+  const ps = sheets[id];
+  console.log(`  ${id.padEnd(8)} : ${ps.found ? `units ${ps.units.length}개` : '시트 없음'}`);
 }
-console.log(`\n총 확인 필요 항목: ${totalIssues}건`);
+
+const { checks, coverage } = verifyAll(sheets);
+
+console.log('\n=== 커버리지 (전수 증명) ===');
+console.log(`  시트 ${coverage.시트수} / 데이터행 ${coverage.데이터행수} / 숫자셀 ${coverage.숫자셀수}`);
+console.log(`  검산항목 ${coverage.검산항목수} / 터치된 셀 ${coverage.터치된셀수} / 커버리지율 ${coverage.커버리지율}%`);
+console.log(`  외톨이(검증불가) ${coverage.외톨이수}개 / 실패 ${coverage.실패건수}건`);
+if (coverage.외톨이수) {
+  console.log('  외톨이 상세:');
+  for (const sheet in coverage.외톨이상세) {
+    console.log(`    ${sheet}: ${JSON.stringify(coverage.외톨이상세[sheet])}`);
+  }
+}
+
+console.log('\n=== 검산 결과 ===');
+for (const c of checks) {
+  console.log(`\n[${c.id}] ${c.title} — ${c.issues.length}건`);
+  for (const iss of c.issues.slice(0, 30)) console.log('   ', JSON.stringify(iss));
+  if (c.issues.length > 30) console.log(`    … 외 ${c.issues.length - 30}건`);
+}
