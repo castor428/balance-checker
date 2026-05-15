@@ -46,14 +46,13 @@ function pass1_formulas(sheets, touched) {
       for (const { target, terms, eq } of eqs) {
         const actual = u.n[target];
         if (actual === null || actual === undefined) continue;
-        let expected = 0, ok = true;
+        // 결산서 회계 관행: 빈칸은 0과 동치(예: 첫 해 "전년도이월사업비" 빈칸 = 0)
+        let expected = 0;
         for (const t of terms) {
           const v = u.n[t.f];
-          if (v === null || v === undefined) { ok = false; break; }
-          expected += t.sign * v;
+          expected += t.sign * (v === null || v === undefined ? 0 : v);
         }
-        if (!ok) continue;
-        // 검산 성립 — 관련 셀 모두 터치
+        // 검산 성립 — 관련 셀 모두 터치 (null 피연산자는 셀 자체가 없으니 자동 제외)
         touched.add(cellKey(spec.id, u._row, target));
         for (const t of terms) touched.add(cellKey(spec.id, u._row, t.f));
         if (Math.abs(actual - expected) > TOLERANCE.금액_원) {
